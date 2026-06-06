@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Spaceplane Scale Visualizer</title>
+
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Widgets/widgets.css"
+        rel="stylesheet" />
+
+    <style>
+        /* Hide the Cesium watermark and credits */
+        .cesium-viewer-bottom {
+            display: none !important;
+        }
+
+        /* Force Cesium UI overlays to always sit on top */
+        .cesium-viewer-toolbar,
+        .cesium-baseLayerPicker-dropDown {
+            z-index: 9999 !important;
+        }
+
+        html,
+        body,
+        #cesiumContainer {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #panelContainer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            font-family: Arial, sans-serif;
+            transform-origin: top left;
+            transform: scale(0.6);
+            opacity: 0.3;
+            transition: transform 0.2s ease-in-out, opacity 0.5s ease-in-out;
+        }
+
+        #panelContainer:hover,
+        #panelContainer:focus-within {
+            transform: scale(1.0);
+            opacity: 1.0;
+        }
+
+        #panel {
+            width: 320px;
+            padding: 15px;
+            background: rgba(0, 0, 0, .85);
+            color: white;
+            border-radius: 10px;
+            border: 1px solid #444;
+        }
+
+        label {
+            display: block;
+            margin-top: 12px;
+        }
+
+        input[type=range] {
+            width: 100%;
+        }
+
+        select,
+        input[type=number] {
+            width: 100%;
+            background: #222;
+            color: white;
+            border: 1px solid #555;
+            padding: 5px;
+            border-radius: 4px;
+            margin-top: 4px;
+            box-sizing: border-box;
+        }
+
+        .label-header {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .value {
+            color: #7de8ff;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            margin-top: 15px;
+        }
+
+        .checkbox-label input {
+            cursor: pointer;
+        }
+
+        /* Fixed 2D HUD Altimeter Tape */
+        #altHUD {
+            position: absolute;
+            right: 50px;
+            top: 40px;
+            bottom: 40px;
+            width: 250px;
+            pointer-events: none;
+            z-index: 10;
+            border-right: 2px solid rgba(255, 255, 255, 0.3);
+            display: none;
+            transition: opacity 0.5s ease-in-out;
+        }
+
+        .hud-marker {
+            position: absolute;
+            right: 0;
+            transform: translateY(-50%);
+            padding-right: 12px;
+            font-family: monospace;
+            font-size: 13px;
+            color: #ddd;
+            white-space: nowrap;
+            text-align: right;
+            text-shadow: 1px 1px 2px black, -1px -1px 2px black;
+        }
+
+        .hud-marker::before {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: 50%;
+            width: 8px;
+            height: 2px;
+            background: currentColor;
+            transform: translateY(-50%);
+        }
+
+        #hudPlane {
+            position: absolute;
+            right: -12px;
+            transform: translateY(-50%);
+            color: lime;
+            font-family: monospace;
+            font-weight: bold;
+            font-size: 14px;
+            display: flex;
+            flex-direction: row-reverse;
+            align-items: center;
+            text-shadow: 1px 1px 2px black, -1px -1px 2px black;
+        }
+
+        #hudPlane::before {
+            content: '◀';
+            margin-left: 6px;
+        }
+
+        /* * FIX 2: Enable smooth opacity transitions for Cesium's built-in UIs 
+         * so they don't abruptly snap out of existence.
+         */
+        .cesium-viewer-animationContainer,
+        .cesium-viewer-timelineContainer,
+        .cesium-viewer-toolbar,
+        .cesium-viewer-fullscreenContainer {
+            transition: opacity 0.5s ease-in-out !important;
+        }
+
+        /* * FIX 2 (Cont.): Apply the fade to all UI elements, including Cesium's 
+         * timeline, clock, and top right tools.
+         */
+        .ui-hidden #panelContainer,
+        .ui-hidden #altHUD,
+        .ui-hidden .cesium-viewer-animationContainer,
+        .ui-hidden .cesium-viewer-timelineContainer,
+        .ui-hidden .cesium-viewer-toolbar,
+        .ui-hidden .cesium-viewer-fullscreenContainer {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="cesiumContainer"></div>
+
+    <div id="altHUD">
+        <div id="hudPlane"></div>
+    </div>
+
+    <div id="panelContainer">
+        <div id="panel">
+            <h3 style="margin-top: 0;">Spaceplane Visualizer</h3>
+
+            <label>Target Body:
+                <select id="planetSelect">
+                    <option value="earth">Earth</option>
+                    <option value="moon">Moon</option>
+                    <option value="mars">Mars</option>
+                </select>
+            </label>
+
+            <label>Preset Scenario:
+                <select id="preset">
+                    <option value="custom">-- Custom --</option>
+                    <option value="cessna">Cessna Light Aircraft (3.5 km, Mach 0.2)</option>
+                    <option value="airliner">Commercial Airliner (10 km, Mach 0.8)</option>
+                    <option value="ruppellsVulture">Rüppell's Vulture (11.3 km, Mach 0.03)</option>
+                    <option value="f22">F-22 Raptor (15 km, Mach 2.25)</option>
+                    <option value="su57">Su-57 Felon (16 km, Mach 2.0)</option>
+                    <option value="sr71">SR-71 Blackbird (26 km, Mach 3.2)</option>
+                    <option value="x43a">NASA X-43A Scramjet (29 km, Mach 9.6)</option>
+                    <option value="df27">DF-27 HGV Phase (60 km, Mach 15.0)</option>
+                    <option value="spaceEdge">Edge of Space / Kármán Line (100 km, Mach 10)</option>
+                    <option value="iss">International Space Station (420 km, Mach 22.5)</option>
+                    <option value="hubble">Hubble Space Telescope (525 km, Mach 22.5)</option>
+                </select>
+            </label>
+            <hr style="border-color:#444; margin:15px 0;">
+
+            <label>
+                <div class="label-header">
+                    <span>Altitude:</span>
+                    <span id="altLabel" class="value">10.0 km</span>
+                </div>
+                <input id="altitude" type="range" min="0" max="100" value="0" step="0.1">
+            </label>
+
+            <label>
+                <div class="label-header">
+                    <span>Speed:</span>
+                    <span id="machLabel" class="value">Mach 1.0</span>
+                </div>
+                <div class="label-header" style="font-size: 0.85em; color: #aaa; margin-top: 4px;">
+                    <span>Groundspeed:</span>
+                    <span id="gsLabel">1225 km/h (761 mph)</span>
+                </div>
+                <input id="mach" type="range" min="0" max="100" value="0" step="0.1">
+            </label>
+
+            <hr style="border-color:#444; margin:15px 0;">
+
+            <label>
+                <div class="label-header">
+                    <span>Pressure:</span>
+                    <span id="pressureLabel" class="value">101.32 kPa (1.00 atm)</span>
+                </div>
+            </label>
+            <label>
+                <div class="label-header">
+                    <span>Tip Temp:</span>
+                    <span id="tempLabel" class="value">15 °C (59 °F)</span>
+                </div>
+            </label>
+
+            <label>Jump to Location:
+                <select id="coolLocations">
+                    <option value="">-- Select a Target --</option>
+                </select>
+            </label>
+
+            <div style="display:flex; gap:10px; margin-top: 10px;">
+                <label style="flex:1; margin-top:0;">Lat: <input id="latInput" type="number" min="-90" max="90"
+                        value="0"></label>
+                <label style="flex:1; margin-top:0;">Lon: <input id="lonInput" type="number" min="-180" max="180"
+                        value="-120"></label>
+            </div>
+
+            <label class="checkbox-label"><input type="checkbox" id="toggleIndicators" checked> Show Altitude
+                Scale</label>
+            <label class="checkbox-label"><input type="checkbox" id="toggleMachCone" checked> Show Mach Cone</label>
+        </div>
+    </div>
+
+    <script>
+        // ======================================================
+        // Access Token & Viewer Setup
+        // ======================================================
+        Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3NDlhNGI4Zi03MTAxLTQ4NzgtOGE2ZS1lM2I0ZTQ1MTU2YjQiLCJpZCI6NDQwNDYwLCJpc3MiOiJodHRwczovL2FwaS5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3ODA2MDAwMjZ9.b4JE_yw2INQ_CN2o21Hnp2-7-OHFXF8hyZcH5m7IGSo';
+
+        const viewer = new Cesium.Viewer("cesiumContainer", {
+            animation: true, timeline: true, fullscreenButton: true,
+            geocoder: false, homeButton: false, sceneModePicker: false,
+            navigationHelpButton: false, baseLayerPicker: true,
+            infoBox: false, selectionIndicator: false,
+            terrain: Cesium.Terrain.fromWorldTerrain({ requestVertexNormals: true, requestWaterMask: true }),
+            baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+                Cesium.ArcGisMapServerImageryProvider.fromBasemapType(Cesium.ArcGisBaseMapType.SATELLITE)
+            ),
+        });
+
+        document.querySelector('.cesium-viewer').appendChild(document.getElementById('altHUD'));
+
+        viewer.scene.globe.enableLighting = true;
+        viewer.clock.shouldAnimate = true;
+        viewer.scene.screenSpaceCameraController.minimumZoomDistance = 1.0;
+        viewer.scene.screenSpaceCameraController.minimumCollisionTerrainHeight = 1.0;
+        viewer.scene.screenSpaceCameraController.enableZoom = false;
+        viewer.camera.frustum.near = 0.1;
+        viewer.scene.globe.depthTestAgainstTerrain = true;
+        viewer.scene.highDynamicRange = true;
+
+        // ======================================================
+        // Custom GLSL Shader Material (Day/Night Blending)
+        // ======================================================
+        Cesium.Material._materialCache.addMaterial('ProgressiveAlpha', {
+            fabric: {
+                type: 'ProgressiveAlpha',
+                uniforms: {
+                    color: new Cesium.Color(1.0, 0.0, 0.0, 1.0),
+                    emissionIntensity: 0.0,
+                    dayNightMix: 1.0 // 1.0 = Day, 0.0 = Night
+                },
+                source: `
+                    czm_material czm_getMaterial(czm_materialInput materialInput) {
+                        czm_material material = czm_getDefaultMaterial(materialInput);
+                        
+                        // Calculate gradient fade from the tip of the cone
+                        float distanceFromTip = length(materialInput.st - vec2(0.5)) * 2.0;
+                        float alphaFade = clamp(1.0 - distanceFromTip, 0.0, 1.0);
+                        alphaFade = alphaFade * alphaFade;
+                        
+                        // Interpolate reflectance between Night (low diffuse) and Day (full diffuse)
+                        float baseReflectance = mix(0.1, 1.0, dayNightMix);
+                        material.diffuse = color.rgb * baseReflectance; 
+                        
+                        // Interpolate alpha body so it isn't completely washed out in the sun
+                        float baseAlpha = mix(0.15, 0.4, dayNightMix);
+                        float dynamicAlpha = clamp(color.a * (baseAlpha + emissionIntensity), 0.0, 1.0);
+                        material.alpha = dynamicAlpha * alphaFade;
+                        
+                        // Emit light (most visible at night)
+                        material.emission = color.rgb * alphaFade * emissionIntensity;
+                        
+                        // Add shiny specular reflections only during the daytime
+                        material.specular = mix(0.0, 0.5, dayNightMix);
+                        material.shininess = 15.0;
+                        
+                        return material;
+                    }
+                `
+            }
+        });
+
+        class ProgressiveAlphaMaterialProperty {
+            constructor(updateCallback) {
+                this._updateCallback = updateCallback;
+                this.definitionChanged = new Cesium.Event();
+                this.isConstant = false;
+            }
+            getType(time) { return 'ProgressiveAlpha'; }
+            getValue(time, result) {
+                if (!result) result = { color: new Cesium.Color(), emissionIntensity: 0.0, dayNightMix: 1.0 };
+                const updatedValues = this._updateCallback(time);
+                result.color = updatedValues.color;
+                result.emissionIntensity = updatedValues.emissionIntensity;
+                result.dayNightMix = updatedValues.dayNightMix !== undefined ? updatedValues.dayNightMix : 1.0;
+                return result;
+            }
+            equals(other) { return this === other; }
+        }
+
+        // ======================================================
+        // Global Physics State
+        // ======================================================
+        const ellipsoids = {
+            earth: Cesium.Ellipsoid.WGS84,
+            mars: new Cesium.Ellipsoid(3389500, 3389500, 3389500),
+            moon: new Cesium.Ellipsoid(1737400, 1737400, 1737400)
+        };
+
+        let activeBody = 'earth'; let currentEllipsoid = ellipsoids.earth; let planetRadius = 6371000;
+        const ORBITAL_SPEED = 7800; const MAX_ALT_KM = 9000; const MAX_MACH = 30;
+        let targetAltitudeKm = 10; let currentAltitudeKm = 10;
+        let targetMach = 1; let currentMach = 1;
+        let longitude = -120; let latitude = 0;
+        let globalAtmos = { temp: 288.15, pressure: 101.325, density: 1.225, soundSpeed: 343 };
+        let globalTrueMach = 1.0; let globalFlicker = 1.0; let targetFlicker = 1.0;
+
+        // ======================================================
+        // Dynamic Locations Data
+        // ======================================================
+        const planetaryLocations = {
+            earth: [
+                { name: "Kennedy Space Center, FL", lat: 28.5728, lon: -80.6489 },
+                { name: "Area 51, NV", lat: 37.2370, lon: -115.8113 },
+                { name: "Bonneville Salt Flats, UT", lat: 40.8223, lon: -112.1026 },
+                { name: "Mount Everest", lat: 27.9881, lon: 86.9250 },
+                { name: "Point Nemo (Ocean Pole)", lat: -48.8766, lon: -123.3933 },
+                { name: "Mariana Trench", lat: 11.3493, lon: 142.1996 },
+                { name: "Grand Canyon, AZ", lat: 36.1018, lon: -112.1105 },
+                { name: "Paris, France", lat: 48.8584, lon: 2.2945 },
+                { name: "Mount Fuji, Japan", lat: 35.3606, lon: 138.7274 },
+                { name: "Mount Kilimanjaro", lat: -3.0674, lon: 37.3556 },
+                { name: "Nazca Lines, Peru", lat: -14.3986, lon: -74.1130 }
+            ],
+            moon: [
+                { name: "Apollo 11 (Tranquility Base)", lat: 0.6740, lon: 23.4720 },
+                { name: "Apollo 15 (Hadley Rille)", lat: 26.1322, lon: 3.6339 },
+                { name: "Tycho Crater", lat: -43.3000, lon: -11.2200 },
+                { name: "Mons Huygens (Highest Peak)", lat: 19.9200, lon: 28.5800 },
+                { name: "Shackleton Crater (South Pole)", lat: -89.6600, lon: 0.0000 }
+            ],
+            mars: [
+                { name: "Olympus Mons", lat: 18.6500, lon: -133.8000 },
+                { name: "Valles Marineris", lat: -14.0000, lon: -59.0000 },
+                { name: "Jezero Crater (Perseverance)", lat: 18.4460, lon: 77.4500 },
+                { name: "Gale Crater (Curiosity)", lat: -5.4000, lon: 137.8000 },
+                { name: "Hellas Planitia (Lowest Point)", lat: -42.7000, lon: 70.0000 }
+            ]
+        };
+
+        function populateLocationDropdown(body) {
+            const dropdown = document.getElementById("coolLocations");
+            dropdown.innerHTML = '<option value="">-- Select a Target --</option>';
+            if (planetaryLocations[body]) {
+                planetaryLocations[body].forEach(loc => {
+                    const opt = document.createElement("option");
+                    opt.value = `${loc.lat},${loc.lon}`; opt.textContent = loc.name;
+                    dropdown.appendChild(opt);
+                });
+            }
+        }
+
+        async function switchPlanet(body) {
+            if (currentTileset) { viewer.scene.primitives.remove(currentTileset); currentTileset = null; }
+            activeBody = body; currentEllipsoid = ellipsoids[body];
+
+            if (body === 'earth') {
+                viewer.scene.globe.show = true; viewer.scene.skyAtmosphere.show = true;
+                viewer.scene.fog.enabled = true; planetRadius = 6371000;
+            } else if (body === 'mars') {
+                viewer.scene.globe.show = false; viewer.scene.skyAtmosphere.show = false;
+                viewer.scene.fog.enabled = false; planetRadius = 3389500;
+                currentTileset = viewer.scene.primitives.add(await Cesium.Cesium3DTileset.fromIonAssetId(3644333));
+            } else if (body === 'moon') {
+                viewer.scene.globe.show = false; viewer.scene.skyAtmosphere.show = false;
+                viewer.scene.fog.enabled = false; planetRadius = 1737400;
+                currentTileset = viewer.scene.primitives.add(await Cesium.Cesium3DTileset.fromIonAssetId(2684829));
+            }
+            populateLocationDropdown(body); rebuildIndicators(body);
+        }
+
+        let currentTileset = null;
+        document.getElementById("planetSelect").addEventListener("change", e => switchPlanet(e.target.value));
+        populateLocationDropdown('earth');
+
+        function getAtmosphereData(body, altitudeKm) {
+            let T, P, D, a; const h = altitudeKm;
+            if (body === 'earth') {
+                if (h < 11) a = Math.sqrt(401.87 * (288.15 - 6.5 * h));
+                else if (h < 20) a = 295.07;
+                else if (h < 32) a = Math.sqrt(401.87 * (216.65 + 1 * (h - 20)));
+                else if (h < 47) a = Math.sqrt(401.87 * (228.65 + 2.8 * (h - 32)));
+                else if (h < 51) a = 329.80;
+                else if (h < 71) a = Math.sqrt(401.87 * (270.65 - 2.8 * (h - 51)));
+                else if (h < 86) a = Math.sqrt(401.87 * (214.65 - 2 * (h - 71)));
+                else a = 1000 - 727.6 * Math.exp(-(h - 86) / 100);
+
+                if (h < 25) D = 1.225 * Math.exp(-h / 7.249);
+                else if (h < 30) D = 0.03899 * Math.exp(-(h - 25) / 6.349);
+                else if (h < 40) D = 0.01774 * Math.exp(-(h - 30) / 6.682);
+                else if (h < 50) D = 0.003972 * Math.exp(-(h - 40) / 7.554);
+                else if (h < 70) D = 0.001057 * Math.exp(-(h - 50) / 8.382);
+                else if (h < 90) D = 8.77e-5 * Math.exp(-(h - 70) / 6.549);
+                else D = 3.396e-6 * Math.exp(-(h - 90) / 5.382);
+
+                T = (a * a) / 401.87; P = (D * 287.05 * T) / 1000;
+            }
+            else if (body === 'mars') {
+                T = 210.0; P = 0.699 * Math.exp(-0.00009 * (h * 1000));
+                D = (P * 1000) / (188.9 * T); a = Math.sqrt(1.29 * 188.9 * T);
+            } else if (body === 'moon') { T = 273.15; P = 0; D = 0; a = 0; }
+            return { temp: T, pressure: P, density: D, soundSpeed: a };
+        }
+
+        function getRealisticStagnationTemp(mach, ambientTemp) {
+            if (mach <= 3.0) return ambientTemp * (1 + 0.2 * mach * mach);
+            const tempAtMach3 = ambientTemp * (1 + 0.2 * 9.0);
+            return tempAtMach3 + 120 * Math.pow(mach - 3.0, 0.85);
+        }
+
+        function getMachConeAngle(mach) {
+            if (mach <= 1) return 0;
+            return Math.asin(1 / Math.max(1.05, mach));
+        }
+
+        function getShockwaveColor(mach) {
+            const t = Math.max(0, Math.min(1, (mach - 1) / 24.0));
+            return new Cesium.Color(1.0, 1.0 - (t * 0.5), 1.0 - t, 1.0);
+        }
+
+        // ======================================================
+        // Dynamic HUD Layers Data
+        // ======================================================
+        const planetLayersData = {
+            earth: [
+                { name: "Troposphere", altKm: 12, color: "#00BFFF" },
+                { name: "Stratosphere", altKm: 50, color: "#7FFFD4" },
+                { name: "Mesosphere", altKm: 85, color: "#6495ED" },
+                { name: "Kármán Line", altKm: 100, color: "#FF0000" },
+                { name: "Thermosphere", altKm: 600, color: "#FF4500" },
+                { name: "Exosphere", altKm: 10000, color: "#2F4F4F" }
+            ],
+            mars: [
+                { name: "Troposphere", altKm: 40, color: "#F4A460" },
+                { name: "Mesosphere", altKm: 100, color: "#CD853F" },
+                { name: "Thermosphere", altKm: 200, color: "#CD5C5C" },
+                { name: "Exosphere", altKm: 300, color: "#2F4F4F" }
+            ],
+            moon: [
+                { name: "Low Lunar Orbit", altKm: 100, color: "#D3D3D3" },
+                { name: "High Lunar Orbit", altKm: 1000, color: "#808080" }
+            ]
+        };
+
+        let activeIndicators = [];
+
+        function rebuildIndicators(body) {
+            const container = document.getElementById("altHUD");
+            container.innerHTML = '<div id="hudPlane"></div>'; activeIndicators = [];
+            const layers = planetLayersData[body] || [];
+            layers.forEach(layer => {
+                const el = document.createElement("div");
+                el.className = "hud-marker"; el.style.color = layer.color;
+                el.innerHTML = `${layer.name} (${layer.altKm} km)`;
+                container.appendChild(el);
+                activeIndicators.push({ el: el, altKm: layer.altKm });
+            });
+        }
+        rebuildIndicators('earth');
+
+        // ======================================================
+        // Entities (Plane, Cone)
+        // ======================================================
+        const plane = viewer.entities.add({
+            position: new Cesium.CallbackProperty(() => {
+                return Cesium.Cartesian3.fromDegrees(longitude, latitude, currentAltitudeKm * 1000, currentEllipsoid);
+            }, false),
+            orientation: new Cesium.CallbackProperty((time, result) => {
+                const pos = Cesium.Cartesian3.fromDegrees(longitude, latitude, currentAltitudeKm * 1000, currentEllipsoid);
+                return Cesium.Transforms.headingPitchRollQuaternion(pos, new Cesium.HeadingPitchRoll(0, 0, 0), currentEllipsoid, result);
+            }, false),
+            point: { pixelSize: 14, color: Cesium.Color.LIME, outlineColor: Cesium.Color.BLACK, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+            path: { width: 4, material: Cesium.Color.LIME }
+        });
+
+        const CONE_LENGTH = 50;
+
+        const machCone = viewer.entities.add({
+            show: new Cesium.CallbackProperty(() => {
+                return document.getElementById("toggleMachCone").checked && globalTrueMach > 1.0;
+            }, false),
+            position: new Cesium.CallbackProperty((time, result) => {
+                const planePos = Cesium.Cartesian3.fromDegrees(longitude, latitude, currentAltitudeKm * 1000, currentEllipsoid);
+                const transform = Cesium.Transforms.eastNorthUpToFixedFrame(planePos, currentEllipsoid);
+                const east = Cesium.Matrix4.getColumn(transform, 0, new Cesium.Cartesian3());
+                const offset = Cesium.Cartesian3.multiplyByScalar(east, -CONE_LENGTH / 2, new Cesium.Cartesian3());
+                if (!result) result = new Cesium.Cartesian3();
+                return Cesium.Cartesian3.add(planePos, offset, result);
+            }, false),
+            orientation: new Cesium.CallbackProperty((time, result) => {
+                const planePos = Cesium.Cartesian3.fromDegrees(longitude, latitude, currentAltitudeKm * 1000, currentEllipsoid);
+                const transform = Cesium.Transforms.eastNorthUpToFixedFrame(planePos, currentEllipsoid);
+                const east = Cesium.Matrix4.getColumn(transform, 0, new Cesium.Cartesian3());
+                const north = Cesium.Matrix4.getColumn(transform, 1, new Cesium.Cartesian3());
+                const up = Cesium.Matrix4.getColumn(transform, 2, new Cesium.Cartesian3());
+
+                const rotationMatrix = new Cesium.Matrix3();
+                Cesium.Matrix3.setColumn(rotationMatrix, 0, north, rotationMatrix);
+                Cesium.Matrix3.setColumn(rotationMatrix, 1, up, rotationMatrix);
+                Cesium.Matrix3.setColumn(rotationMatrix, 2, east, rotationMatrix);
+
+                return Cesium.Quaternion.fromRotationMatrix(rotationMatrix, result);
+            }, false),
+            cylinder: {
+                length: CONE_LENGTH, topRadius: 0,
+                bottomRadius: new Cesium.CallbackProperty(() => Math.tan(getMachConeAngle(globalTrueMach)) * CONE_LENGTH, false),
+                material: new ProgressiveAlphaMaterialProperty((time) => {
+                    const baseColor = getShockwaveColor(globalTrueMach);
+                    const densityRatio = Math.min(1.0, globalAtmos.density / 1.225);
+                    const targetAlpha = Math.sqrt(densityRatio) * 0.8 * globalFlicker;
+                    const stagTempK = getRealisticStagnationTemp(globalTrueMach, globalAtmos.temp);
+                    const tempIntensity = Math.max(0.0, (stagTempK - 773.0) / 773.0);
+
+                    // --- Day / Night Uniform Math ---
+                    const planePos = Cesium.Cartesian3.fromDegrees(longitude, latitude, currentAltitudeKm * 1000, currentEllipsoid);
+                    const sunDir = viewer.scene.context.uniformState.sunDirectionWC;
+
+                    let isDay = 1.0;
+                    if (sunDir) {
+                        const planeDir = Cesium.Cartesian3.normalize(planePos, new Cesium.Cartesian3());
+                        const dayNightDot = Cesium.Cartesian3.dot(sunDir, planeDir);
+                        // Smoothly interpolate around the terminator (sunrise/sunset edge)
+                        isDay = Cesium.Math.clamp((dayNightDot + 0.1) * 5.0, 0.0, 1.0);
+                    }
+
+                    return {
+                        color: baseColor.withAlpha(targetAlpha),
+                        emissionIntensity: tempIntensity,
+                        dayNightMix: isDay
+                    };
+                }),
+                outline: false
+            }
+        });
+
+        viewer.trackedEntity = plane;
+
+        // ======================================================
+        // UI Interaction
+        // ======================================================
+        const altitudeSlider = document.getElementById("altitude");
+        const machSlider = document.getElementById("mach");
+        const altLabel = document.getElementById("altLabel");
+        const machLabel = document.getElementById("machLabel");
+        const gsLabel = document.getElementById("gsLabel");
+        const pressureLabel = document.getElementById("pressureLabel");
+        const tempLabel = document.getElementById("tempLabel");
+        const presetDropdown = document.getElementById("preset");
+        const locationDropdown = document.getElementById("coolLocations");
+        const indicatorToggle = document.getElementById("toggleIndicators");
+
+        function updateSlidersFromTargets() {
+            altitudeSlider.value = 100 * Math.cbrt(targetAltitudeKm / MAX_ALT_KM);
+            machSlider.value = 100 * Math.cbrt(targetMach / MAX_MACH);
+        }
+        updateSlidersFromTargets();
+
+        altitudeSlider.addEventListener("input", e => {
+            const pct = parseFloat(e.target.value) / 100.0;
+            targetAltitudeKm = MAX_ALT_KM * Math.pow(pct, 3); presetDropdown.value = "custom";
+        });
+
+        machSlider.addEventListener("input", e => {
+            const pct = parseFloat(e.target.value) / 100.0;
+            targetMach = MAX_MACH * Math.pow(pct, 3); presetDropdown.value = "custom";
+        });
+
+        presetDropdown.addEventListener("change", e => {
+            const val = e.target.value;
+            if (val === "airliner") { targetAltitudeKm = 10; targetMach = 0.8; }
+            else if (val === "sr71") { targetAltitudeKm = 26; targetMach = 3.2; }
+            else if (val === "spaceEdge") { targetAltitudeKm = 100; targetMach = 10; }
+            else if (val === "iss") { targetAltitudeKm = 420; targetMach = 22.5; }
+            else if (val === "cessna") { targetAltitudeKm = 3.5; targetMach = 0.2; }
+            else if (val === "ruppellsVulture") { targetAltitudeKm = 11.3; targetMach = 0.03; }
+            else if (val === "f22") { targetAltitudeKm = 15; targetMach = 2.25; }
+            else if (val === "su57") { targetAltitudeKm = 16; targetMach = 2.0; }
+            else if (val === "x43a") { targetAltitudeKm = 29; targetMach = 9.6; }
+            else if (val === "df27") { targetAltitudeKm = 60; targetMach = 15.0; }
+            else if (val === "hubble") { targetAltitudeKm = 525; targetMach = 22.5; }
+            if (val !== "custom") updateSlidersFromTargets();
+        });
+
+        locationDropdown.addEventListener("change", e => {
+            const val = e.target.value; if (!val) return;
+            const coords = val.split(","); latitude = parseFloat(coords[0]); longitude = parseFloat(coords[1]);
+            document.getElementById("latInput").value = latitude; document.getElementById("lonInput").value = longitude;
+            locationDropdown.value = "";
+        });
+
+        document.getElementById("latInput").addEventListener("change", e => latitude = Math.max(-90, Math.min(90, parseFloat(e.target.value))));
+        document.getElementById("lonInput").addEventListener("change", e => longitude = Math.max(-180, Math.min(180, parseFloat(e.target.value))));
+
+        // ======================================================
+        // Simulation Tick Handler
+        // ======================================================
+        let lastRealTime = performance.now();
+
+        viewer.clock.onTick.addEventListener((clock) => {
+            const nowRealTime = performance.now();
+            const dtRealSeconds = (nowRealTime - lastRealTime) / 1000.0;
+            lastRealTime = nowRealTime;
+
+            if (!clock.shouldAnimate) return;
+
+            const dtSimulation = dtRealSeconds * clock.multiplier;
+            const lerpRate = 0.05;
+
+            currentAltitudeKm += (targetAltitudeKm - currentAltitudeKm) * lerpRate;
+            currentMach += (targetMach - currentMach) * lerpRate;
+
+            if (Math.random() < 0.1) targetFlicker = 0.3 + Math.random() * 0.7;
+            globalFlicker += (targetFlicker - globalFlicker) * 15.0 * dtRealSeconds * Math.sqrt(currentMach);
+
+            globalAtmos = getAtmosphereData(activeBody, currentAltitudeKm);
+
+            const moveSoundSpeed = globalAtmos.soundSpeed > 0 ? globalAtmos.soundSpeed : 343;
+            const speedMS = currentMach * moveSoundSpeed;
+            globalTrueMach = globalAtmos.soundSpeed > 0 ? currentMach : 0;
+
+            const radius = planetRadius + (currentAltitudeKm * 1000);
+            const angularRate = speedMS / radius;
+
+            longitude += Cesium.Math.toDegrees(angularRate * dtSimulation);
+            if (longitude > 180) longitude -= 360;
+            if (longitude < -180) longitude += 360;
+
+            if (document.activeElement !== document.getElementById("lonInput")) {
+                document.getElementById("lonInput").value = longitude.toFixed(2);
+            }
+
+            // UI Readouts
+            altLabel.textContent = currentAltitudeKm.toFixed(1) + " km";
+            machLabel.textContent = "Mach " + currentMach.toFixed(1);
+            const gsKph = speedMS * 3.6; const gsMph = speedMS * 2.23694;
+            gsLabel.textContent = `${Math.round(gsKph)} km/h (${Math.round(gsMph)} mph)`;
+
+            const press_kPa = globalAtmos.pressure; const press_atm = press_kPa * 0.00986923;
+            const kpaStr = press_kPa > 0.1 ? press_kPa.toFixed(2) : press_kPa.toExponential(2);
+            const atmStr = press_atm > 0.001 ? press_atm.toFixed(3) : press_atm.toExponential(2);
+            pressureLabel.textContent = `${kpaStr} kPa (${atmStr} atm)`;
+
+            const stagTempK = getRealisticStagnationTemp(globalTrueMach, globalAtmos.temp);
+            const tempC = stagTempK - 273.15; const tempF = (tempC * 9 / 5) + 32;
+            tempLabel.textContent = `${Math.round(tempC)} °C (${Math.round(tempF)} °F)`;
+
+            const orbitalPercent = (speedMS / ORBITAL_SPEED) * 100;
+            let trailColor = orbitalPercent < 25 ? Cesium.Color.YELLOW : (orbitalPercent < 75 ? Cesium.Color.ORANGE : Cesium.Color.LIME);
+            plane.path.material = trailColor; plane.point.color = trailColor;
+
+            // Update Fixed 2D Altimeter Tape 
+            const showIndicators = indicatorToggle.checked;
+            const hud = document.getElementById("altHUD");
+
+            if (!showIndicators) { hud.style.display = "none"; }
+            else {
+                hud.style.display = "block";
+                const hudHeight = hud.clientHeight;
+                let layerMax = 100;
+                if (planetLayersData[activeBody] && planetLayersData[activeBody].length > 0) {
+                    layerMax = Math.max(...planetLayersData[activeBody].map(l => l.altKm));
+                }
+                const maxScaleAlt = Math.max(layerMax, currentAltitudeKm * 1.1);
+
+                function getHudY(alt) {
+                    const pct = Math.sqrt(Math.max(0, alt) / maxScaleAlt);
+                    return hudHeight - (pct * hudHeight);
+                }
+
+                activeIndicators.forEach(ind => { ind.el.style.top = getHudY(ind.altKm) + "px"; });
+
+                const planeMarker = document.getElementById("hudPlane");
+                if (planeMarker) {
+                    planeMarker.style.top = getHudY(currentAltitudeKm) + "px";
+                    planeMarker.innerHTML = `${currentAltitudeKm.toFixed(1)} km`;
+                }
+            }
+        });
+
+        viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 2000000, currentEllipsoid),
+            duration: 0
+        });
+
+        // ======================================================
+        // Mouse Inactivity Timeout (Fades UI)
+        // ======================================================
+        let uiFadeTimer;
+        function resetUiFadeTimer() {
+            document.body.classList.remove('ui-hidden');
+            clearTimeout(uiFadeTimer);
+            uiFadeTimer = setTimeout(() => {
+                document.body.classList.add('ui-hidden');
+            }, 4000); // Fades away after 4 seconds of inactivity
+        }
+
+        // Listen for any interactions that indicate the user is present
+        ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'].forEach(event => {
+            document.addEventListener(event, resetUiFadeTimer);
+        });
+
+        // Initialize the timer on launch
+        resetUiFadeTimer();
+
+    </script>
+</body>
+
+</html>
