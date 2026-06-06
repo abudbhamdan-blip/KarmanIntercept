@@ -132,6 +132,12 @@
             cursor: pointer;
         }
 
+        .ui-faded {
+            opacity: 0 !important;
+            pointer-events: none !important;
+            /* Prevents accidentally clicking invisible buttons */
+        }
+
         /* Fixed 2D HUD Altimeter Tape */
         #altHUD {
             position: absolute;
@@ -465,7 +471,77 @@
         viewer.scene.globe.depthTestAgainstTerrain = true;
         viewer.scene.highDynamicRange = true;
 
+        // Grab your UI elements
+        const panel = document.getElementById('panelContainer');
+        const hud = document.getElementById('altHUD');
 
+
+        // ======================================================
+        // Hiding UI on Drag & Inactivity
+        // ======================================================
+
+        let isMouseDown = false;
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let inactivityTimer;
+
+        // Centralized function to show the UI and start the 4-second fade countdown
+        function resetInactivityTimer() {
+            clearTimeout(inactivityTimer);
+
+            // Only wake up the UI if we aren't currently dragging
+            if (!isDragging) {
+                document.body.classList.remove('ui-hidden');
+            }
+
+            // Set a timer to hide the UI after 4 seconds of no interaction
+            inactivityTimer = setTimeout(() => {
+                // Double-check we aren't holding the mouse down when the timer fires
+                if (!isMouseDown) {
+                    document.body.classList.add('ui-hidden');
+                }
+            }, 4000);
+        }
+
+        // 1. Record where the click/touch starts & reset the timer
+        viewer.screenSpaceEventHandler.setInputAction((event) => {
+            isMouseDown = true;
+            isDragging = false;
+            startX = event.position.x;
+            startY = event.position.y;
+            resetInactivityTimer();
+        }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+
+        // 2. Detect dragging to hide the UI immediately
+        viewer.screenSpaceEventHandler.setInputAction((movement) => {
+            if (!isMouseDown) return;
+
+            const deltaX = Math.abs(movement.endPosition.x - startX);
+            const deltaY = Math.abs(movement.endPosition.y - startY);
+
+            // If dragged more than 10 pixels, hide UI and suspend the timer
+            if (deltaX > 10 || deltaY > 10) {
+                isDragging = true;
+                clearTimeout(inactivityTimer);
+                document.body.classList.add('ui-hidden');
+            }
+        }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+        // 3. Reappear on release and restart the 4-second countdown
+        viewer.screenSpaceEventHandler.setInputAction(() => {
+            isMouseDown = false;
+            isDragging = false;
+            resetInactivityTimer();
+        }, Cesium.ScreenSpaceEventType.LEFT_UP);
+
+        // (Optional) 4. Keep UI awake if they just click without dragging
+        viewer.screenSpaceEventHandler.setInputAction(() => {
+            resetInactivityTimer();
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+        // Start the timer when the page first loads
+        resetInactivityTimer();
 
         // ======================================================
         // Custom GLSL Shader Material (Day/Night Blending)
@@ -951,6 +1027,8 @@
 
         // Listen for any interactions that indicate the user is present
         ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'].forEach(event => {
+
+
             document.addEventListener(event, resetUiFadeTimer);
         });
 
