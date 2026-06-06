@@ -48,8 +48,6 @@
             letter-spacing: 0.3px;
         }
 
-
-
         #panelContainer:hover,
         #panelContainer:focus-within {
             transform: scale(1.0);
@@ -72,6 +70,37 @@
             /* Subtle edge highlight */
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
             /* Soft drop shadow */
+            max-height: 95vh;
+            /* Prevents it from growing taller than 85% of the screen height */
+            overflow-y: auto;
+            direction: rtl;
+            /* Move scrollbar to left */
+        }
+
+        /* Reset text direction for content */
+        #panel>* {
+            direction: ltr;
+        }
+
+
+        /* Custom Scrollbar for the Panel */
+        #panel::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #panel::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+        }
+
+        #panel::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+        }
+
+        #panel::-webkit-scrollbar-thumb:hover {
+            background: rgba(125, 232, 255, 0.6);
+            /* Matches your neon blue highlight */
         }
 
         label {
@@ -158,13 +187,18 @@
         /* Mobile override: Disable shrinking and fading */
         @media only screen and (max-width: 768px) {
             #altHUD {
-                transform: scale(.95) !important;
+                transform: scale(.85) !important;
             }
 
             #panelContainer {
                 transform: scale(.5) !important;
                 opacity: 1.0 !important;
                 transition: none !important;
+            }
+
+            #panel {
+                max-height: 60vh !important;
+                /* Instead of 95vh */
             }
         }
 
@@ -440,7 +474,11 @@
             <label class="checkbox-label"><input type="checkbox" id="toggleIndicators" checked> Show Altitude
                 Scale</label>
             <label class="checkbox-label"><input type="checkbox" id="toggleMachCone" checked> Show Mach Cone</label>
+            <label class="checkbox-label"><input type="checkbox" id="toggleDot" checked> Show Spaceplane Dot</label>
+
         </div>
+
+
     </div>
 
     <script>
@@ -614,11 +652,13 @@
 
         let activeBody = 'earth'; let currentEllipsoid = ellipsoids.earth; let planetRadius = 6371000;
         const ORBITAL_SPEED = 7800; const MAX_ALT_KM = 9000; const MAX_MACH = 30;
+
+        // --- FIX: Change starting targetMach to 2.0 so the cone is visible by default ---
         let targetAltitudeKm = 10; let currentAltitudeKm = 10;
-        let targetMach = 1; let currentMach = 1;
+        let targetMach = 2.0; let currentMach = 2.0;
         let longitude = -120; let latitude = 0;
         let globalAtmos = { temp: 288.15, pressure: 101.325, density: 1.225, soundSpeed: 343 };
-        let globalTrueMach = 1.0; let globalFlicker = 1.0; let targetFlicker = 1.0;
+        let globalTrueMach = 2.0; let globalFlicker = 1.0; let targetFlicker = 1.0;
 
         // ======================================================
         // Dynamic Locations Data
@@ -777,6 +817,7 @@
         // Entities (Plane, Cone)
         // ======================================================
         const plane = viewer.entities.add({
+            // --- FIX: show property removed ---
             position: new Cesium.CallbackProperty(() => {
                 return Cesium.Cartesian3.fromDegrees(longitude, latitude, currentAltitudeKm * 1000, currentEllipsoid);
             }, false),
@@ -791,9 +832,7 @@
         const CONE_LENGTH = 50;
 
         const machCone = viewer.entities.add({
-            show: new Cesium.CallbackProperty(() => {
-                return document.getElementById("toggleMachCone").checked && globalTrueMach > 1.0;
-            }, false),
+            // --- FIX: show property removed ---
             position: new Cesium.CallbackProperty((time, result) => {
                 const planePos = Cesium.Cartesian3.fromDegrees(longitude, latitude, currentAltitudeKm * 1000, currentEllipsoid);
                 const transform = Cesium.Transforms.eastNorthUpToFixedFrame(planePos, currentEllipsoid);
@@ -976,8 +1015,19 @@
             tempLabel.textContent = `${Math.round(tempC)} °C (${Math.round(tempF)} °F)`;
 
             const orbitalPercent = (speedMS / ORBITAL_SPEED) * 100;
-            let trailColor = orbitalPercent < 25 ? Cesium.Color.YELLOW : (orbitalPercent < 75 ? Cesium.Color.ORANGE : Cesium.Color.LIME);
-            plane.path.material = trailColor; plane.point.color = trailColor;
+            let baseTrailColor = orbitalPercent < 25 ? Cesium.Color.YELLOW : (orbitalPercent < 75 ? Cesium.Color.ORANGE : Cesium.Color.LIME);
+
+            // --- FIX: Use transparency instead of 'show' to keep the camera tracking ---
+            const showDot = document.getElementById("toggleDot").checked;
+            const dotAlpha = showDot ? 1.0 : 0.0; // 1 = fully visible, 0 = completely invisible
+            let finalTrailColor = baseTrailColor.withAlpha(dotAlpha);
+
+            plane.path.material = finalTrailColor;
+            plane.point.color = finalTrailColor;
+            plane.point.outlineColor = Cesium.Color.BLACK.withAlpha(dotAlpha); // Fade the black outline too
+
+            // (Make sure to DELETE the old plane.show line!)
+            machCone.show = document.getElementById("toggleMachCone").checked && globalTrueMach > 1.0;
 
             // Update Fixed 2D Altimeter Tape 
             const showIndicators = indicatorToggle.checked;
@@ -1027,8 +1077,6 @@
 
         // Listen for any interactions that indicate the user is present
         ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'].forEach(event => {
-
-
             document.addEventListener(event, resetUiFadeTimer);
         });
 
